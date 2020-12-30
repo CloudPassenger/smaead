@@ -195,8 +195,6 @@ func gcmInc32(counterBlock *[16]byte) {
 	binary.BigEndian.PutUint32(ctr, binary.BigEndian.Uint32(ctr)+1)
 }
 
-
-
 // counterCrypt crypts in to out using g.cipher in counter mode.
 func (g *Gcm) counterCrypt(out, in []byte, counter *[gcmBlockSize]byte) {
 	var mask [gcmBlockSize]byte

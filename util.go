@@ -11,6 +11,10 @@ import (
 	"unsafe"
 )
 
+type PartialAEAD interface {
+	OpenWithoutCheck(dst, nonce, ciphertext []byte) []byte
+}
+
 // anyOverlap reports whether x and y share memory at any (not necessarily
 // corresponding) index. The memory beyond the slice length is ignored.
 func anyOverlap(x, y []byte) bool {
