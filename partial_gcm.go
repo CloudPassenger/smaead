@@ -2,7 +2,6 @@ package smaead
 
 import (
 	"crypto/cipher"
-	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 )
@@ -35,13 +34,7 @@ type Gcm struct {
 	productTable [16]gcmFieldElement
 }
 
-// NewGCM returns the given 128-bit, block cipher wrapped in Galois Counter Mode
-// with the standard nonce length.
-//
-// In general, the GHASH operation performed by this implementation of GCM is not constant-time.
-// An exception is when the underlying Block was created by aes.NewCipher
-// on systems with hardware support for AES. See the crypto/aes package documentation for details.
-func NewGCM(cipher cipher.Block) (*Gcm, error) {
+func NewPartialGCM(cipher cipher.Block) (*Gcm, error) {
 	return newGCMWithNonceAndTagSize(cipher, gcmStandardNonceSize, gcmTagSize)
 }
 
@@ -90,91 +83,7 @@ func (g *Gcm) Overhead() int {
 	return g.tagSize
 }
 
-func (g *Gcm) Seal(dst, nonce, plaintext, data []byte) []byte {
-	if len(nonce) != g.nonceSize {
-
-		panic("crypto/cipher: incorrect nonce length given to GCM")
-
-	}
-	if uint64(len(plaintext)) > ((1<<32)-2)*uint64(g.cipher.BlockSize()) {
-
-		panic("crypto/cipher: message too large for GCM")
-
-	}
-	ret, out := sliceForAppend(dst, len(plaintext)+g.tagSize)
-	if inexactOverlap(out, plaintext) {
-
-		panic("crypto/cipher: invalid buffer overlap")
-
-	}
-	var counter, tagMask [gcmBlockSize]byte
-	g.deriveCounter(&counter, nonce)
-	g.cipher.Encrypt(tagMask[:], counter[:])
-	gcmInc32(&counter)
-	g.counterCrypt(out, plaintext, &counter)
-	var tag [gcmTagSize]byte
-	g.auth(tag[:], out[:len(plaintext)], data, &tagMask)
-	copy(out[len(plaintext):], tag[:])
-	return ret
-}
-
-var errOpen = errors.New("cipher: message authentication failed")
-
-func (g *Gcm) Open(dst, nonce, ciphertext, data []byte) ([]byte, error) {
-	if len(nonce) != g.nonceSize {
-
-		panic("crypto/cipher: incorrect nonce length given to GCM")
-
-	}
-	// Sanity check to prevent the authentication from always succeeding if an implementation
-	// leaves tagSize uninitialized, for example.
-	if g.tagSize < gcmMinimumTagSize {
-
-		panic("crypto/cipher: incorrect GCM tag size")
-
-	}
-	if len(ciphertext) < g.tagSize {
-
-		return nil, errOpen
-
-	}
-	if uint64(len(ciphertext)) > ((1<<32)-2)*uint64(g.cipher.BlockSize())+uint64(g.tagSize) {
-
-		return nil, errOpen
-
-	}
-	tag := ciphertext[len(ciphertext)-g.tagSize:]
-	ciphertext = ciphertext[:len(ciphertext)-g.tagSize]
-	var counter, tagMask [gcmBlockSize]byte
-	// set ctr
-	g.deriveCounter(&counter, nonce)
-	// set tag mask
-	g.cipher.Encrypt(tagMask[:], counter[:])
-	gcmInc32(&counter)
-	var expectedTag [gcmTagSize]byte
-	g.auth(expectedTag[:], ciphertext, data, &tagMask)
-	ret, out := sliceForAppend(dst, len(ciphertext))
-	if inexactOverlap(out, ciphertext) {
-
-		panic("crypto/cipher: invalid buffer overlap")
-
-	}
-	// check tag
-	if subtle.ConstantTimeCompare(expectedTag[:g.tagSize], tag) != 1 {
-		// The AESNI code decrypts and authenticates concurrently, and
-		// so overwrites dst in the event of a tag mismatch. That
-		// behavior is mimicked here in order to be consistent across
-		// platforms.
-		for i := range out {
-			out[i] = 0
-		}
-		return nil, errOpen
-	}
-	g.counterCrypt(out, ciphertext, &counter)
-	return ret, nil
-}
-
-func (g *Gcm) OpenWithoutCheck(dst, nonce, ciphertext []byte) ([]byte, error) {
+func (g *Gcm) OpenWithoutCheck(dst, nonce, ciphertext []byte) []byte {
 	if len(nonce) != g.nonceSize {
 		panic("crypto/cipher: incorrect nonce length given to GCM")
 	}
@@ -187,7 +96,7 @@ func (g *Gcm) OpenWithoutCheck(dst, nonce, ciphertext []byte) ([]byte, error) {
 		panic("crypto/cipher: invalid buffer overlap")
 	}
 	g.counterCrypt(out, ciphertext, &counter)
-	return ret, nil
+	return ret
 }
 
 // reverseBits reverses the order of the bits of 4-bit number in i.
@@ -286,20 +195,7 @@ func gcmInc32(counterBlock *[16]byte) {
 	binary.BigEndian.PutUint32(ctr, binary.BigEndian.Uint32(ctr)+1)
 }
 
-// sliceForAppend takes a slice and a requested number of bytes. It returns a
-// slice with the contents of the given slice followed by that many bytes and a
-// second slice that aliases into it and contains only the extra bytes. If the
-// original slice has sufficient capacity then no allocation is performed.
-func sliceForAppend(in []byte, n int) (head, tail []byte) {
-	if total := len(in) + n; cap(in) >= total {
-		head = in[:total]
-	} else {
-		head = make([]byte, total)
-		copy(head, in)
-	}
-	tail = head[len(in):]
-	return
-}
+
 
 // counterCrypt crypts in to out using g.cipher in counter mode.
 func (g *Gcm) counterCrypt(out, in []byte, counter *[gcmBlockSize]byte) {
@@ -339,22 +235,4 @@ func (g *Gcm) deriveCounter(counter *[gcmBlockSize]byte, nonce []byte) {
 		binary.BigEndian.PutUint64(counter[:8], y.low)
 		binary.BigEndian.PutUint64(counter[8:], y.high)
 	}
-}
-
-// auth calculates GHASH(ciphertext, additionalData), masks the result with
-// tagMask and writes the result to out.
-func (g *Gcm) auth(out, ciphertext, additionalData []byte, tagMask *[gcmTagSize]byte) {
-	var y gcmFieldElement
-	g.update(&y, additionalData)
-	g.update(&y, ciphertext)
-
-	y.low ^= uint64(len(additionalData)) * 8
-	y.high ^= uint64(len(ciphertext)) * 8
-
-	g.mul(&y)
-
-	binary.BigEndian.PutUint64(out, y.low)
-	binary.BigEndian.PutUint64(out[8:], y.high)
-
-	xorWords(out, out, tagMask[:])
 }
