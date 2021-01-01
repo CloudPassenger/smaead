@@ -6,12 +6,6 @@ import (
 	"errors"
 )
 
-// AEAD is a cipher mode providing authenticated encryption with associated
-// data. For a description of the methodology, see
-//	https://en.wikipedia.org/wiki/Authenticated_encryption
-type AEAD cipher.AEAD
-type Block cipher.Block
-
 // gcmFieldElement represents a value in GF(2¹²⁸). In order to reflect the GCM
 // standard and make binary.BigEndian suitable for marshaling these values, the
 // bits are stored in big endian order. For example:
@@ -27,30 +21,18 @@ type gcmFieldElement struct {
 // https://csrc.nist.gov/groups/ST/toolkit/BCM/documents/proposedmodes/gcm/gcm-revised-spec.pdf
 type Gcm struct {
 	cipher    cipher.Block
-	nonceSize int
-	tagSize   int
 	// productTable contains the first sixteen powers of the key, H.
 	// However, they are in bit reversed order. See NewGCMWithNonceSize.
 	productTable [16]gcmFieldElement
 }
 
 func NewPartialGCM(cipher cipher.Block) (*Gcm, error) {
-	return newGCMWithNonceAndTagSize(cipher, gcmStandardNonceSize, gcmTagSize)
-}
-
-func newGCMWithNonceAndTagSize(cipher Block, nonceSize, tagSize int) (*Gcm, error) {
-	if tagSize < gcmMinimumTagSize || tagSize > gcmBlockSize {
-		return nil, errors.New("cipher: incorrect tag size given to GCM")
-	}
-	if nonceSize <= 0 {
-		return nil, errors.New("cipher: the nonce can't have zero length, or the security of the key will be immediately compromised")
-	}
 	if cipher.BlockSize() != gcmBlockSize {
 		return nil, errors.New("cipher: NewGCM requires 128-bit block cipher")
 	}
 	var key [gcmBlockSize]byte
 	cipher.Encrypt(key[:], key[:])
-	g := &Gcm{cipher: cipher, nonceSize: nonceSize, tagSize: tagSize}
+	g := &Gcm{cipher: cipher}
 	// We precompute 16 multiples of |key|. However, when we do lookups
 	// into this table we'll be using bits from a field element and
 	// therefore the bits will be in the reverse order. So normally one
@@ -70,22 +52,12 @@ func newGCMWithNonceAndTagSize(cipher Block, nonceSize, tagSize int) (*Gcm, erro
 
 const (
 	gcmBlockSize         = 16
-	gcmTagSize           = 16
-	gcmMinimumTagSize    = 12 // NIST SP 800-38D recommends tags with 12 or more bytes.
 	gcmStandardNonceSize = 12
 )
 
-func (g *Gcm) NonceSize() int {
-	return g.nonceSize
-}
-
-func (g *Gcm) Overhead() int {
-	return g.tagSize
-}
-
 func (g *Gcm) OpenWithoutCheck(dst, nonce, ciphertext []byte) []byte {
-	if len(nonce) != g.nonceSize {
-		panic("crypto/cipher: incorrect nonce length given to GCM")
+	if len(nonce) != gcmStandardNonceSize {
+		panic("smaead.gcm: incorrect nonce length given to GCM")
 	}
 	var counter [gcmBlockSize]byte
 	// set ctr
@@ -93,7 +65,7 @@ func (g *Gcm) OpenWithoutCheck(dst, nonce, ciphertext []byte) []byte {
 	gcmInc32(&counter)
 	ret, out := sliceForAppend(dst, len(ciphertext))
 	if inexactOverlap(out, ciphertext) {
-		panic("crypto/cipher: invalid buffer overlap")
+		panic("smaead.gcm: invalid buffer overlap")
 	}
 	g.counterCrypt(out, ciphertext, &counter)
 	return ret
@@ -130,62 +102,6 @@ func gcmDouble(x *gcmFieldElement) (double gcmFieldElement) {
 		double.low ^= 0xe100000000000000
 	}
 	return
-}
-
-var gcmReductionTable = []uint16{
-	0x0000, 0x1c20, 0x3840, 0x2460, 0x7080, 0x6ca0, 0x48c0, 0x54e0,
-	0xe100, 0xfd20, 0xd940, 0xc560, 0x9180, 0x8da0, 0xa9c0, 0xb5e0,
-}
-
-// mul sets y to y*H, where H is the GCM key, fixed during NewGCMWithNonceSize.
-func (g *Gcm) mul(y *gcmFieldElement) {
-	var z gcmFieldElement
-	for i := 0; i < 2; i++ {
-		word := y.high
-		if i == 1 {
-			word = y.low
-		}
-		// Multiplication works by multiplying z by 16 and adding in
-		// one of the precomputed multiples of H.
-		for j := 0; j < 64; j += 4 {
-			msw := z.high & 0xf
-			z.high >>= 4
-			z.high |= z.low << 60
-			z.low >>= 4
-			z.low ^= uint64(gcmReductionTable[msw]) << 48
-			// the values in |table| are ordered for
-			// little-endian bit positions. See the comment
-			// in NewGCMWithNonceSize.
-			t := &g.productTable[word&0xf]
-			z.low ^= t.low
-			z.high ^= t.high
-			word >>= 4
-		}
-	}
-	*y = z
-}
-
-// updateBlocks extends y with more polynomial terms from blocks, based on
-// Horner's rule. There must be a multiple of gcmBlockSize bytes in blocks.
-func (g *Gcm) updateBlocks(y *gcmFieldElement, blocks []byte) {
-	for len(blocks) > 0 {
-		y.low ^= binary.BigEndian.Uint64(blocks)
-		y.high ^= binary.BigEndian.Uint64(blocks[8:])
-		g.mul(y)
-		blocks = blocks[gcmBlockSize:]
-	}
-}
-
-// update extends y with more polynomial terms from data. If data is not a
-// multiple of gcmBlockSize bytes long then the remainder is zero padded.
-func (g *Gcm) update(y *gcmFieldElement, data []byte) {
-	fullBlocks := (len(data) >> 4) << 4
-	g.updateBlocks(y, data[:fullBlocks])
-	if len(data) != fullBlocks {
-		var partialBlock [gcmBlockSize]byte
-		copy(partialBlock[:], data[fullBlocks:])
-		g.updateBlocks(y, partialBlock[:])
-	}
 }
 
 // gcmInc32 treats the final four bytes of counterBlock as a big-endian value
@@ -226,11 +142,6 @@ func (g *Gcm) deriveCounter(counter *[gcmBlockSize]byte, nonce []byte) {
 		copy(counter[:], nonce)
 		counter[gcmBlockSize-1] = 1
 	} else {
-		var y gcmFieldElement
-		g.update(&y, nonce)
-		y.high ^= uint64(len(nonce)) * 8
-		g.mul(&y)
-		binary.BigEndian.PutUint64(counter[:8], y.low)
-		binary.BigEndian.PutUint64(counter[8:], y.high)
+		panic("smaead.gcm: use 12 byte nonce!")
 	}
 }
