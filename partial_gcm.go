@@ -6,21 +6,10 @@ import (
 	"errors"
 )
 
-// gcmFieldElement represents a value in GF(2¹²⁸). In order to reflect the GCM
-// standard and make binary.BigEndian suitable for marshaling these values, the
-// bits are stored in big endian order. For example:
-//   the coefficient of x⁰ can be obtained by v.low >> 63.
-//   the coefficient of x⁶³ can be obtained by v.low & 1.
-//   the coefficient of x⁶⁴ can be obtained by v.high >> 63.
-//   the coefficient of x¹²⁷ can be obtained by v.high & 1.
-type gcmFieldElement struct {
-	low, high uint64
-}
-
 // Gcm represents a Galois Counter Mode with a specific key. See
 // https://csrc.nist.gov/groups/ST/toolkit/BCM/documents/proposedmodes/gcm/gcm-revised-spec.pdf
 type Gcm struct {
-	cipher    cipher.Block
+	cipher cipher.Block
 	// productTable contains the first sixteen powers of the key, H.
 	// However, they are in bit reversed order. See NewGCMWithNonceSize.
 	productTable [16]gcmFieldElement
@@ -69,46 +58,6 @@ func (g *Gcm) OpenWithoutCheck(dst, nonce, ciphertext []byte) []byte {
 	}
 	g.counterCrypt(out, ciphertext, &counter)
 	return ret
-}
-
-// reverseBits reverses the order of the bits of 4-bit number in i.
-func reverseBits(i int) int {
-	i = ((i << 2) & 0xc) | ((i >> 2) & 0x3)
-	i = ((i << 1) & 0xa) | ((i >> 1) & 0x5)
-	return i
-}
-
-// gcmAdd adds two elements of GF(2¹²⁸) and returns the sum.
-func gcmAdd(x, y *gcmFieldElement) gcmFieldElement {
-	// Addition in a characteristic 2 field is just XOR.
-	return gcmFieldElement{x.low ^ y.low, x.high ^ y.high}
-}
-
-// gcmDouble returns the result of doubling an element of GF(2¹²⁸).
-func gcmDouble(x *gcmFieldElement) (double gcmFieldElement) {
-	msbSet := x.high&1 == 1
-	// Because of the bit-ordering, doubling is actually a right shift.
-	double.high = x.high >> 1
-	double.high |= x.low << 63
-	double.low = x.low >> 1
-	// If the most-significant bit was set before shifting then it,
-	// conceptually, becomes a term of x^128. This is greater than the
-	// irreducible polynomial so the result has to be reduced. The
-	// irreducible polynomial is 1+x+x^2+x^7+x^128. We can subtract that to
-	// eliminate the term at x^128 which also means subtracting the other
-	// four terms. In characteristic 2 fields, subtraction == addition ==
-	// XOR.
-	if msbSet {
-		double.low ^= 0xe100000000000000
-	}
-	return
-}
-
-// gcmInc32 treats the final four bytes of counterBlock as a big-endian value
-// and increments it.
-func gcmInc32(counterBlock *[16]byte) {
-	ctr := counterBlock[len(counterBlock)-4:]
-	binary.BigEndian.PutUint32(ctr, binary.BigEndian.Uint32(ctr)+1)
 }
 
 // counterCrypt crypts in to out using g.cipher in counter mode.
