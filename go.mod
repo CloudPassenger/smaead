@@ -1,4 +1,4 @@
-module github.com/studentmain/smaead
+module github.com/qv2ray/smaead
 
 go 1.15
 
