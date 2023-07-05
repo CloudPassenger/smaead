@@ -28,7 +28,7 @@ func partialAeadRun(aead cipher.AEAD, paead smaead.PartialAEAD, bs, count int) b
 		ct := aead.Seal(nil, nonce, pt, nil)
 		ct = ct[:len(pt)]
 		pt2 := paead.OpenWithoutCheck(nil, nonce, ct)
-		if bytes.Compare(pt, pt2) != 0 {
+		if !bytes.Equal(pt, pt2) {
 			return false
 		}
 	}
@@ -48,7 +48,7 @@ func partialAeadBench(aead cipher.AEAD, paead smaead.PartialAEAD, bs, count int)
 	ct = ct[:len(pt)]
 	for n := 0; n < count; n++ {
 		pt2 := paead.OpenWithoutCheck(nil, nonce, ct)
-		if bytes.Compare(pt, pt2) != 0 {
+		if !bytes.Equal(pt, pt2) {
 			return false
 		}
 	}
