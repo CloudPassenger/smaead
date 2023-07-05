@@ -66,14 +66,14 @@ func (g *Gcm) counterCrypt(out, in []byte, counter *[gcmBlockSize]byte) {
 	for len(in) >= gcmBlockSize {
 		g.cipher.Encrypt(mask[:], counter[:])
 		gcmInc32(counter)
-		xorWords(out, in, mask[:])
+		XORBytes(out, in, mask[:])
 		out = out[gcmBlockSize:]
 		in = in[gcmBlockSize:]
 	}
 	if len(in) > 0 {
 		g.cipher.Encrypt(mask[:], counter[:])
 		gcmInc32(counter)
-		xorBytes(out, in, mask[:])
+		XORBytes(out, in, mask[:])
 	}
 }
 
