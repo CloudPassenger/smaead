@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"github.com/qv2ray/smaead"
-	"golang.org/x/crypto/chacha20poly1305"
 	"math/rand"
 	"testing"
+
+	"github.com/CloudPassenger/smaead"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 var key = []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf}
